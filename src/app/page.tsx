@@ -4,12 +4,14 @@ import { useState, useEffect } from "react";
 import VaultCreation from "./VaultCreation";
 import VaultList from "./VaultList";
 import { publicClient, getWalletClient } from "../lib/viem";
-import type { WalletClient, PublicClient } from "viem";
+import type { WalletClient } from "viem";
+import type { Address } from "viem";
 
 // Dirección de cCOP en Alfajores
 const CCOP_ADDRESS = "0xe6A57340f0df6E020c1c0a80bC6E13048601f0d4";
 
-// ABI mínimo ERC20
+// ABI mínimo ERC20, poca arquitectura jmmm, ni screaming architecture, ni nada recordatorio ome
+// separación de responsabilidades oñoooo
 const ERC20_ABI = [
   {
     name: "balanceOf",
@@ -37,7 +39,7 @@ const ERC20_ABI = [
 export default function Home() {
   const [isClient, setIsClient] = useState(false);
   const [walletClient, setWalletClient] = useState<WalletClient | null>(null);
-  const [account, setAccount] = useState<string>("");
+  const [account, setAccount] = useState<Address | null>(null);
   const [balance, setBalance] = useState<string>("0.0000");
   const [tokenSymbol, setTokenSymbol] = useState<string>("cCOP");
   const [refreshKey, setRefreshKey] = useState(0);
@@ -49,22 +51,22 @@ export default function Home() {
   }, []);
 
   // Función para leer balance de cCOP
-  async function fetchCcopBalance(addr: string) {
+  async function fetchCcopBalance(addr: Address) {
     try {
       const [balWei, decimals, symbol] = await Promise.all([
         publicClient.readContract({
-          address: CCOP_ADDRESS as `0x${string}`,
+          address: CCOP_ADDRESS as Address,
           abi: ERC20_ABI,
           functionName: "balanceOf",
           args: [addr],
         }),
         publicClient.readContract({
-          address: CCOP_ADDRESS as `0x${string}`,
+          address: CCOP_ADDRESS as Address,
           abi: ERC20_ABI,
           functionName: "decimals",
         }),
         publicClient.readContract({
-          address: CCOP_ADDRESS as `0x${string}`,
+          address: CCOP_ADDRESS as Address,
           abi: ERC20_ABI,
           functionName: "symbol",
         }),
@@ -93,15 +95,17 @@ export default function Home() {
       const [addr] = (await walletClient.request({
         method: "eth_requestAccounts",
       })) as string[];
-      setAccount(addr);
-      await fetchCcopBalance(addr);
+
+      const typedAddr = addr as Address; // 👈 conversión segura
+      setAccount(typedAddr);
+      await fetchCcopBalance(typedAddr);
       setRefreshKey((k) => k + 1);
     } catch (err) {
       console.error("Error conectando wallet:", err);
     }
   }
 
-  // Polling cada 15s para refrescar balance
+  // Polling cada 15s para refrescar balance, rapido, no se...
   useEffect(() => {
     if (!account) return;
     const interval = setInterval(async () => {
@@ -150,16 +154,13 @@ export default function Home() {
         )}
 
         <VaultCreation
-          account={account}
+          account={account ?? undefined}
           walletClient={walletClient}
-          publicClient={publicClient}
-          balance={balance}
           onRefresh={() => setRefreshKey((k) => k + 1)}
         />
         <VaultList
-          account={account}
+          account={account ?? undefined}
           walletClient={walletClient}
-          publicClient={publicClient}
           refreshKey={refreshKey}
         />
       </div>
