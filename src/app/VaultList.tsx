@@ -1,17 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Abi, PublicClient, WalletClient, Address } from "viem";
-import { decodeErrorResult, formatUnits, zeroAddress } from "viem";
+import type { Abi, WalletClient, Address } from "viem";
+import { decodeErrorResult, formatUnits } from "viem";
 import { celoAlfajores } from "viem/chains";
 import { FACTORY_ADDRESS, fornoClient } from "../lib/viem";
 import { TOKENS } from "../lib/tokens";
 import { vaultAbi } from "../lib/vaultAbi";
 
-// ✅ referenciar cCOP desde tokens.ts
 const CCOP = TOKENS.ccop;
 
-// Minimal ERC20 ABI para symbol/decimals
 const ERC20_ABI = [
   {
     name: "symbol",
@@ -43,7 +41,6 @@ type Vault = {
 type Props = {
   account?: Address;
   walletClient: WalletClient | null;
-  publicClient: PublicClient;
   refreshKey?: number;
   onRefresh?: () => void;
 };
@@ -59,7 +56,6 @@ export default function VaultList({
   const [withdrawingId, setWithdrawingId] = useState<bigint | null>(null);
   const [error, setError] = useState<Record<string, string>>({});
 
-  /** Cargar todas las bóvedas registradas por el usuario */
   useEffect(() => {
     if (!account) {
       setVaults([]);
@@ -69,7 +65,6 @@ export default function VaultList({
 
     (async () => {
       try {
-        // total bóvedas
         const len = (await fornoClient.readContract({
           address: FACTORY_ADDRESS,
           abi: vaultAbi as Abi,
@@ -82,19 +77,19 @@ export default function VaultList({
           return;
         }
 
-        // IDs de bóvedas
         const ids = await Promise.all(
-          Array.from({ length: Number(len) }, (_, i) =>
-            fornoClient.readContract({
-              address: FACTORY_ADDRESS,
-              abi: vaultAbi as Abi,
-              functionName: "userVaults",
-              args: [account, BigInt(i)],
-            }) as Promise<bigint>
-          )
+          Array.from(
+            { length: Number(len) },
+            (_, i) =>
+              fornoClient.readContract({
+                address: FACTORY_ADDRESS,
+                abi: vaultAbi as Abi,
+                functionName: "userVaults",
+                args: [account, BigInt(i)],
+              }) as Promise<bigint>,
+          ),
         );
 
-        // Datos base
         const data = await Promise.all(
           ids.map(async (vaultId) => {
             const [creator, token, amount, unlockTime, withdrawn] =
@@ -109,19 +104,25 @@ export default function VaultList({
             let decimals = 18;
 
             try {
-              symbol = (await fornoClient.readContract({
-                address: token as `0x${string}`,
-                abi: ERC20_ABI,
-                functionName: "symbol",
-              })) as string;
-
-              decimals = Number(
-                await fornoClient.readContract({
+              if (token !== "0x0000000000000000000000000000000000000000") {
+                symbol = (await fornoClient.readContract({
                   address: token as `0x${string}`,
                   abi: ERC20_ABI,
-                  functionName: "decimals",
-                })
-              );
+                  functionName: "symbol",
+                })) as string;
+
+                decimals = Number(
+                  await fornoClient.readContract({
+                    address: token as `0x${string}`,
+                    abi: ERC20_ABI,
+                    functionName: "decimals",
+                  }),
+                );
+              } else {
+                // native CELO
+                symbol = "CELO";
+                decimals = 18;
+              }
             } catch {
               console.warn(`No se pudo leer metadata ERC20 de ${token}`);
             }
@@ -136,7 +137,7 @@ export default function VaultList({
               symbol,
               decimals,
             } as Vault;
-          })
+          }),
         );
 
         setVaults(data);
@@ -149,7 +150,6 @@ export default function VaultList({
     })();
   }, [account, refreshKey]);
 
-  /** Retirar fondos de una bóveda */
   async function withdrawVault(id: bigint) {
     if (!walletClient || !account) return;
     const vault = vaults.find((v) => v.id === id);
@@ -162,7 +162,7 @@ export default function VaultList({
       return;
     }
     if (!unlocked) {
-      alert("⏳ Aún no ha llegado el tiempo de desbloqueo definido en el contrato.");
+      alert("⏳ Aún no ha llegado el tiempo de desbloqueo.");
       return;
     }
 
@@ -178,32 +178,32 @@ export default function VaultList({
         });
       }
 
-      // dry-run
-	const { result: raw } = await fornoClient.simulateContract({
- 	 address: FACTORY_ADDRESS,
- 	 abi: vaultAbi as Abi,
- 	 functionName: "withdraw",
- 	 args: [id],
- 	 account,
-	});
+      try {
+        const { request } = await fornoClient.simulateContract({
+          chain: celoAlfajores,
+          address: FACTORY_ADDRESS,
+          abi: vaultAbi as Abi,
+          functionName: "withdraw",
+          args: [id],
+          account,
+        });
 
+        const gasPrice = await fornoClient.getGasPrice();
+        const txHash = await walletClient.writeContract({
+          ...request,
+        });
 
-      if (typeof raw === "string" && raw !== "0x") {
-        try {
-          const { args } = decodeErrorResult({
-            abi: vaultAbi as Abi,
-            data: raw,
-          });
-          const reason = String(args?.[0] || "Reversión sin motivo específico");
-          setError((e) => ({ ...e, [id.toString()]: reason }));
-          alert("❌ Retiro rechazado:\n" + reason);
-        } catch {
-          setError((e) => ({
-            ...e,
-            [id.toString()]: "Reversión sin detalle legible",
-          }));
-          alert("❌ No se pudo ejecutar el retiro.");
-        }
+        console.log("✅ Transacción enviada:", txHash);
+        onRefresh?.();
+      } catch (simErr: unknown) {
+        console.error("Error en simulación de retiro:", simErr);
+        const msg =
+          (simErr as any)?.cause?.data?.message ||
+          (simErr as any)?.shortMessage ||
+          (simErr as Error).message ||
+          "Reversión sin motivo específico";
+        setError((e) => ({ ...e, [id.toString()]: msg }));
+        alert("❌ Retiro rechazado:\n" + msg);
         setWithdrawingId(null);
         return;
       }
@@ -231,46 +231,45 @@ export default function VaultList({
 
       console.log("✅ Transacción enviada:", txHash);
       onRefresh?.();
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error al retirar:", err);
       const msg =
-        err?.shortMessage ||
-        err?.cause?.shortMessage ||
-        err?.message ||
+        (err as any)?.shortMessage ||
+        (err as Error).message ||
         "Error desconocido";
       setError((e) => ({ ...e, [id.toString()]: String(msg) }));
-      alert("❌ No se pudo retirar la bóveda:\n" + msg);
+      alert("❌ No se pudo retirar la bóveda:\n" + String(msg));
     } finally {
       setWithdrawingId(null);
     }
   }
 
-  // UI
-  if (!account) {
-    return <p className="text-gray-600">Conecta tu wallet para consultar las bóvedas asignadas.</p>;
-  }
-  if (loading) {
+  if (!account)
+    return (
+      <p className="text-gray-600">
+        Conecta tu wallet para consultar las bóvedas asignadas.
+      </p>
+    );
+  if (loading)
     return <p className="text-gray-600">Cargando información de bóvedas…</p>;
-  }
-  if (vaults.length === 0) {
-    return <p className="text-gray-600">No se registraron bóvedas a tu nombre.</p>;
-  }
+  if (vaults.length === 0)
+    return (
+      <p className="text-gray-600">No se registraron bóvedas a tu nombre.</p>
+    );
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold text-lg text-blue-900">Bóvedas Auditables</h2>
+      <h2 className="text-xl font-bold text-lg text-blue-900">
+        Bóvedas Auditables
+      </h2>
       {vaults.map((v) => {
         const unlocked = Number(v.unlockTime) * 1000 <= Date.now();
         const key = v.id.toString();
-
         const formatted = v.decimals
           ? formatUnits(v.amount, v.decimals)
           : v.amount.toString();
-
         const label =
-          v.token.toLowerCase() === zeroAddress
-            ? "CELO"
-            : v.token.toLowerCase() === CCOP.address.toLowerCase()
+          v.token.toLowerCase() === CCOP.address.toLowerCase()
             ? `COP$ (${CCOP.symbol})`
             : v.symbol || v.token;
 
@@ -279,14 +278,23 @@ export default function VaultList({
             key={key}
             className="p-4 bg-white rounded-lg shadow-sm text-black border border-blue-200"
           >
-            <p><strong>ID:</strong> {key}</p>
-            <p><strong>Token:</strong> {label}</p>
-            <p><strong>Monto asignado:</strong> {formatted} {label}</p>
+            <p>
+              <strong>ID:</strong> {key}
+            </p>
+            <p>
+              <strong>Token:</strong> {label}
+            </p>
+            <p>
+              <strong>Monto asignado:</strong> {formatted} {v.symbol}
+            </p>
             <p>
               <strong>Fecha de desbloqueo:</strong>{" "}
               {new Date(Number(v.unlockTime) * 1000).toLocaleString()}
             </p>
-            <p><strong>Estado:</strong> {v.withdrawn ? "Retirado" : "En custodia"}</p>
+            <p>
+              <strong>Estado:</strong>{" "}
+              {v.withdrawn ? "Retirado" : "En custodia"}
+            </p>
 
             {!v.withdrawn && unlocked && isOwner(v.creator, account) && (
               <button
@@ -294,7 +302,9 @@ export default function VaultList({
                 disabled={withdrawingId === v.id}
                 className="mt-2 px-4 py-1 bg-green-700 text-white rounded hover:bg-green-800 disabled:opacity-50"
               >
-                {withdrawingId === v.id ? "Procesando retiro…" : "Retirar fondos"}
+                {withdrawingId === v.id
+                  ? "Procesando retiro…"
+                  : "Retirar fondos"}
               </button>
             )}
 
@@ -310,7 +320,6 @@ export default function VaultList({
   );
 }
 
-/** Helpers */
 function isOwner(creator: string, account: Address) {
   return creator.toLowerCase() === account.toLowerCase();
 }
