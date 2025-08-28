@@ -87,7 +87,7 @@ export const TOKENS: Record<
   }
 > = {
   ccop: {
-    address: CCOP_ADDRESS as Address, // 👈 dirección correcta tomada de viem.ts
+    address: CCOP_ADDRESS as Address,
     symbol: "cCOP",
     decimals: 18,
     label: "COP$ (cCOP)",
@@ -105,7 +105,5 @@ export const TOKENS: Record<
 // ✅ Helper: buscar token por address
 export function getTokenByAddress(address: string) {
   const addr = address.toLowerCase();
-  return Object.values(TOKENS).find(
-    (t) => t.address.toLowerCase() === addr
-  );
+  return Object.values(TOKENS).find((t) => t.address.toLowerCase() === addr);
 }
