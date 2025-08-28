@@ -2,31 +2,27 @@
 
 import { useState, useEffect } from "react";
 import { parseUnits, formatUnits } from "viem";
+import type { WalletClient, Address } from "viem";
 import { celoAlfajores } from "viem/chains";
 import abiJson from "../../abi/TimeLockVaultFactory.json";
-import { getTypedPublicClient } from "../lib/viem";
+import { publicClient } from "../lib/viem";
 import { TOKENS } from "../lib/tokens";
-import type { WalletClient, PublicClient } from "viem";
 
 const factoryAbi = abiJson.abi;
 const FACTORY_ADDRESS = "0x6Dcbd404e62151Bea13e3670b231F5846AB1dA97";
 const CCOP = TOKENS.ccop;
 
 type Props = {
-  account?: string;
+  account?: Address;
   walletClient: WalletClient | null;
-  publicClient?: PublicClient;
   onRefresh?: () => void;
 };
 
 export default function VaultCreation({
   account,
   walletClient,
-  publicClient,
   onRefresh,
 }: Props) {
-  const client = publicClient ?? getTypedPublicClient();
-
   const [amount, setAmount] = useState("");
   const [duration, setDuration] = useState("");
   const [txHash, setTxHash] = useState<string | null>(null);
@@ -37,13 +33,13 @@ export default function VaultCreation({
     if (!account) return;
     (async () => {
       try {
-        const balWei = await client.readContract({
+        const balWei = await publicClient.readContract({
           address: CCOP.address,
           abi: CCOP.abi,
           functionName: "balanceOf",
           args: [account],
         });
-        const decimals = await client.readContract({
+        const decimals = await publicClient.readContract({
           address: CCOP.address,
           abi: CCOP.abi,
           functionName: "decimals",
@@ -55,14 +51,18 @@ export default function VaultCreation({
         setCcopBalance("0");
       }
     })();
-  }, [account, client, txHash]);
+  }, [account, txHash]);
 
   async function createVault() {
-    if (!walletClient || !account) return;
+    if (!walletClient || !account) {
+      alert("Conecta la wallet antes de crear una bóveda.");
+      return;
+    }
     if (!amount || !duration) {
       alert("Debes ingresar monto y duración");
       return;
     }
+
     setIsLoading(true);
     try {
       const chainId = await walletClient.getChainId();
@@ -73,65 +73,40 @@ export default function VaultCreation({
         });
       }
 
+      // parsed values
       const parsedAmount = parseUnits(amount, CCOP.decimals);
       const parsedDuration = BigInt(duration);
       const nowTs = BigInt(Math.floor(Date.now() / 1000));
       const unlockTime = nowTs + parsedDuration;
 
-      const { request: approveRequest } = await client.simulateContract({
-        chain: celoAlfajores,
-        address: CCOP.address,
-        abi: CCOP.abi,
-        functionName: "approve",
-        args: [FACTORY_ADDRESS, parsedAmount],
-        account: account as `0x${string}`,
-      });
-
-      const approveTx = await walletClient.writeContract(approveRequest);
-      console.log("Approve enviado:", approveTx);
-
-      await client.waitForTransactionReceipt({ hash: approveTx });
-
-      const { request } = await client.simulateContract({
+      // simulate (dry-run)
+      const { request } = await publicClient.simulateContract({
         chain: celoAlfajores,
         address: FACTORY_ADDRESS,
         abi: factoryAbi,
         functionName: "createVaultERC20",
         args: [CCOP.address, parsedAmount, unlockTime],
-        account: account as `0x${string}`,
+        account,
       });
 
-      const hash = await walletClient.writeContract(request);
+      // send tx
+      const gasPrice = await publicClient.getGasPrice();
+      const hash = await walletClient.writeContract({
+        ...request,
+      });
+
       setTxHash(hash);
       onRefresh?.();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error al crear bóveda:", error);
       const msg =
-        error?.cause?.data?.message ||
-        error?.shortMessage ||
-        error?.message ||
+        (error as any)?.cause?.data?.message ||
+        (error as any)?.shortMessage ||
+        (error as Error).message ||
         "Unknown error";
-      alert("Revert/Fail: " + msg);
+      alert("Revert/Fail: " + String(msg));
     } finally {
       setIsLoading(false);
-    }
-  }
-
-  async function addCcopToMetamask() {
-    try {
-      await (window as any).ethereum.request({
-        method: "wallet_watchAsset",
-        params: {
-          type: "ERC20",
-          options: {
-            address: CCOP.address,
-            symbol: CCOP.symbol,
-            decimals: CCOP.decimals,
-          },
-        },
-      });
-    } catch (err) {
-      console.error("Error al agregar token a MetaMask:", err);
     }
   }
 
@@ -180,13 +155,6 @@ export default function VaultCreation({
         {isLoading
           ? "Registrando compromiso..."
           : "Crear bóveda de transparencia"}
-      </button>
-
-      <button
-        onClick={addCcopToMetamask}
-        className="w-full px-4 py-2 text-white rounded-md bg-blue-600 hover:bg-blue-700"
-      >
-        Agregar cCOP a MetaMask
       </button>
 
       {txHash && (
