@@ -34,8 +34,8 @@ export const vaultAbi: Abi = [
   {
     inputs: [{ internalType: "uint256", name: "vaultId", type: "uint256" }],
     name: "withdraw",
-    outputs: [], // ← Outputs vacíos
-    stateMutability: "nonpayable", // ← Mismo que en tu contrato
-    type: "function", // ← Indispensable
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
   },
 ];
